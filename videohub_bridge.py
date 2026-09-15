@@ -30,49 +30,39 @@ serial_conn = None
 
 # --- SERIAL HANDLING ---
 import usb.core
-import usb.util
 
-dev = None
-
-def init_bm_usb():
-    global dev
-    # Suche nach Studio Videohub ID 1edb:bd25
-    dev = usb.core.find(idVendor=0x1edb, idProduct=0xbd25)
-    
-    if dev is None:
-        print("[USB] Fehler: Studio Videohub (1edb:bd25) nicht am USB-Bus gefunden.")
-        return False
-
+# Videohub initialisieren
+dev = usb.core.find(idVendor=0x1edb, idProduct=0xbd25)
+if dev:
     try:
-        # Falls der Linux-Kernel ein Standard-Modul gebunden hat, trennen
-        if dev.is_kernel_driver_active(0):
-            dev.detach_kernel_driver(0)
-            
         dev.set_configuration()
-        print("[USB] Erfolgreich via PyUSB mit Blackmagic Studio Videohub verbunden!")
-        return True
-    except Exception as e:
-        print(f"[USB] Fehler beim Initialisieren des USB-Interface: {e}")
-        return False
+    except Exception:
+        pass
 
 def send_to_hardware(output_idx, input_idx):
-    """
-    Schreibt das Routing-Kommando direkt auf den USB-Bulk/Control-Endpoint.
-    Blackmagic verwendet bei der 16x32 Generation meist ein 8-Byte oder 16-Byte
-    Bulk-Control-Frame. Format: [Header, Output-ID, Input-ID, Checksum/Padding]
-    """
     if dev is None:
+        print("[USB ERROR] Kein Videohub verbunden!")
         return
 
     try:
-        # Beispielhaftes BMD Bulk-Frame für Routing-Change:
-        # Endpoint 0x01 oder 0x02 ist typisch für BMD Out-Transfers
-        payload = bytes([0x01, 0x00, output_idx & 0xFF, input_idx & 0xFF, 0x00, 0x00, 0x00, 0x00])
+        # Indizes anpassen: Videohub erwartet 0-basierte Indizes (Input 1 = 0x00, Input 2 = 0x01 etc.)
+        hw_input = max(0, input_idx - 1)
+        hw_output = max(0, output_idx - 1)  # Falls wir später den Output auch dynamisch mappen wollen
+
+        # Basis-Template aus dem Wireshark-Dump (36 Bytes lang)
+        # An Position 30 (0x1e) sitzt der Input-Index.
+        packet = bytearray([
+            0x1c, 0x00, 0x20, 0x07, 0x1e, 0x10, 0x02, 0xc8, 
+            0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x17, 0x00,
+            0x00, 0x01, 0x00, 0x08, 0x00, 0x80, 0x02, 0x08, 
+            0x00, 0x00, 0x00, 0x00, 0xc0, 0xd7, hw_input, 0x00,
+            0x10, 0x00, 0x01, 0x00
+        ])
+
+        # Über Endpoint 0x02 rausschicken (wie vom Pi-Test bestätigt ohne Timeout-Fehler)
+        dev.write(0x02, packet, timeout=1000)
+        print(f"[USB HARDWARE CUT] Output {output_idx} <- Input {input_idx} (Hex-Input: {hw_input:02x})")
         
-        # Endpoint address (0x01 oder 0x02 ausprobieren):
-        endpoint_out = 0x01 
-        dev.write(endpoint_out, payload, timeout=1000)
-        print(f"[USB HARDWARE CUT] Output {output_idx} <- Input {input_idx}")
     except Exception as e:
         print(f"[USB WRITE ERROR] {e}")
 

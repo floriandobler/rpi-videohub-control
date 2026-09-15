@@ -71,12 +71,10 @@ def send_to_hardware(output_idx, input_idx):
         return
 
     try:
-        # Indizes anpassen: Videohub erwartet 0-basierte Indizes (Input 1 = 0x00, Input 2 = 0x01 etc.)
+        # Sicherstellen, dass wir im gültigen Bereich bleiben (mindestens 0)
         hw_input = max(0, input_idx - 1)
-        hw_output = max(0, output_idx - 1)  # Falls wir später den Output auch dynamisch mappen wollen
+        hw_output = max(0, output_idx - 1)
 
-        # Basis-Template aus dem Wireshark-Dump (36 Bytes lang)
-        # An Position 30 (0x1e) sitzt der Input-Index.
         packet = bytearray([
             0x1c, 0x00, 0x20, 0x07, 0x1e, 0x10, 0x02, 0xc8, 
             0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x17, 0x00,
@@ -85,8 +83,16 @@ def send_to_hardware(output_idx, input_idx):
             0x10, 0x00, 0x01, 0x00
         ])
 
-        # Über Endpoint 0x02 rausschicken (wie vom Pi-Test bestätigt ohne Timeout-Fehler)
+        # Befehl senden
         dev.write(0x02, packet, timeout=1000)
+        
+        # WICHTIG: Puffer / Antwort kurz abholen (Endpoint 0x86 IN), 
+        # damit der USB-Controller des Hubs nicht in den Timeout läuft!
+        try:
+            dev.read(0x86, 64, timeout=100)
+        except Exception:
+            pass # Timeout beim Lesen ist hier egal, Hauptsache der Puffer ist frei
+
         print(f"[USB HARDWARE CUT] Output {output_idx} <- Input {input_idx} (Hex-Input: {hw_input:02x})")
         
     except Exception as e:

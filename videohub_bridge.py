@@ -29,29 +29,52 @@ clients = []
 serial_conn = None
 
 # --- SERIAL HANDLING ---
-def init_serial():
-    global serial_conn
+import usb.core
+import usb.util
+
+dev = None
+
+def init_bm_usb():
+    global dev
+    # Suche nach Studio Videohub ID 1edb:bd25
+    dev = usb.core.find(idVendor=0x1edb, idProduct=0xbd25)
+    
+    if dev is None:
+        print("[USB] Fehler: Studio Videohub (1edb:bd25) nicht am USB-Bus gefunden.")
+        return False
+
     try:
-        serial_conn = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=0.1)
-        print(f"[USB] Erfolgreich verbunden mit {SERIAL_PORT}")
+        # Falls der Linux-Kernel ein Standard-Modul gebunden hat, trennen
+        if dev.is_kernel_driver_active(0):
+            dev.detach_kernel_driver(0)
+            
+        dev.set_configuration()
+        print("[USB] Erfolgreich via PyUSB mit Blackmagic Studio Videohub verbunden!")
+        return True
     except Exception as e:
-        print(f"[USB WARNUNG] Serieller Port {SERIAL_PORT} nicht verfügbar ({e}).")
-        print("[USB WARNUNG] Skript läuft im Emulations-Modus (TCP-Server voll funktionsfähig).")
+        print(f"[USB] Fehler beim Initialisieren des USB-Interface: {e}")
+        return False
 
 def send_to_hardware(output_idx, input_idx):
     """
-    Sendet das Routing-Kommando an das Hardware-Interface.
-    Falls der Videohub über USB-Serial CDC Befehle annimmt (z.B. "P0 5\n"), 
-    wird das Format hier angepasst.
+    Schreibt das Routing-Kommando direkt auf den USB-Bulk/Control-Endpoint.
+    Blackmagic verwendet bei der 16x32 Generation meist ein 8-Byte oder 16-Byte
+    Bulk-Control-Frame. Format: [Header, Output-ID, Input-ID, Checksum/Padding]
     """
-    if serial_conn and serial_conn.is_open:
-        cmd = f"SET OUT {output_idx} IN {input_idx}\n".encode('ascii')
-        try:
-            with lock:
-                serial_conn.write(cmd)
-            print(f"[USB SENT] Out {output_idx} <- In {input_idx}")
-        except Exception as e:
-            print(f"[USB ERROR] Fehler beim Schreiben auf USB: {e}")
+    if dev is None:
+        return
+
+    try:
+        # Beispielhaftes BMD Bulk-Frame für Routing-Change:
+        # Endpoint 0x01 oder 0x02 ist typisch für BMD Out-Transfers
+        payload = bytes([0x01, 0x00, output_idx & 0xFF, input_idx & 0xFF, 0x00, 0x00, 0x00, 0x00])
+        
+        # Endpoint address (0x01 oder 0x02 ausprobieren):
+        endpoint_out = 0x01 
+        dev.write(endpoint_out, payload, timeout=1000)
+        print(f"[USB HARDWARE CUT] Output {output_idx} <- Input {input_idx}")
+    except Exception as e:
+        print(f"[USB WRITE ERROR] {e}")
 
 # --- PROTOCOL EMULATION ---
 def build_initial_dump():

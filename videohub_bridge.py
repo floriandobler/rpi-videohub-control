@@ -30,7 +30,33 @@ serial_conn = None
 
 # --- SERIAL HANDLING ---
 import usb.core
+import usb.util
 
+dev = None
+
+def init_bm_usb():
+    global dev
+    # Sucht den Blackmagic Studio Videohub anhand von VendorID und ProductID
+    dev = usb.core.find(idVendor=0x1edb, idProduct=0xbd25)
+    if dev is None:
+        print("[USB WARNING] Videohub nicht per USB gefunden!")
+        return False
+    
+    try:
+        # Falls der Kernel-Treiber aktiv ist, diesen kurz trennen
+        if dev.is_kernel_driver_active(0):
+            dev.detach_kernel_driver(0)
+    except Exception:
+        pass
+
+    try:
+        dev.set_configuration()
+        print("[USB INFO] Videohub erfolgreich initialisiert.")
+        return True
+    except Exception as e:
+        print(f"[USB ERROR] Konnte Konfiguration nicht setzen: {e}")
+        return False
+        
 # Videohub initialisieren
 dev = usb.core.find(idVendor=0x1edb, idProduct=0xbd25)
 if dev:

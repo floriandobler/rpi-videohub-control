@@ -188,7 +188,7 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 # --- MAIN ---
 if __name__ == "__main__":
-    init_serial()
+    init_bm_usb()
     
     server = ThreadedTCPServer((TCP_HOST, TCP_PORT), VideohubTCPHandler)
     print(f"[SERVER] Blackmagic Videohub Bridge läuft auf Port {TCP_PORT}...")

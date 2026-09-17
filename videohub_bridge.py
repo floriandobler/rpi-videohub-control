@@ -2,6 +2,7 @@ import socket
 import threading
 import usb.core
 import usb.util
+import sys
 
 USB_VID = 0x1edb
 USB_PID = 0xbd25
@@ -41,12 +42,9 @@ def send_to_hardware(output_idx, input_idx):
             if not init_usb():
                 return False
         try:
-            # Ethernet Protocol nutzt 0-basierte Indizes (0 = Port 1).
-            # USB Mapping: Inputs = 0-15, Outputs = 16-31.
             hw_input = input_idx
             hw_output = output_idx + 16
 
-            # Der entschlüsselte Control-Transfer
             dev.ctrl_transfer(0xc0, 215, hw_input, hw_output, 1, timeout=1000)
             print(f"[ROUTING] Output {output_idx + 1} <- Input {input_idx + 1} geschaltet.")
             return True
@@ -61,41 +59,42 @@ def send_to_hardware(output_idx, input_idx):
             return False
 
 def handle_client(client_socket, addr):
-    print(f"[TCP] Control Software verbunden: {addr[0]}")
-    try:
-        # 1. Preamble als reinen Text aufbauen
+    print(f"[TCP] Client verbunden: {addr[0]}")
+    
+    # Preamble aufbauen (Strikt nach Blackmagic Ethernet Protocol Spezifikation)
         preamble = (
             "PROTOCOL: Videohub\n"
-            "VERSION: 2.8\n"
-            "DEVICENAME: Pi USB Bridge\n"
-            f"VIDEO INPUTS: {NUM_INPUTS}\n"
-            f"VIDEO OUTPUTS: {NUM_OUTPUTS}\n\n"
+            "VERSION: 2.8\n\n"
+            "VIDEOHUB DEVICE:\n"
+            "Device present: true\n"
+            "Model name: Pi USB Bridge\n"
+            f"Video inputs: {NUM_INPUTS}\n"
+            "Video processing units: 0\n"
+            f"Video outputs: {NUM_OUTPUTS}\n"
+            "Video monitoring outputs: 16\n"
+            "Serial ports: 0\n\n"
+            "INPUT LABELS:\n"
         )
-        
-        preamble += "INPUT LABELS:\n"
         for i in range(NUM_INPUTS):
             preamble += f"{i} Input {i+1}\n"
-        preamble += "\n"
+        preamble += "\nOUTPUT LABELS:\n"
         
-        preamble += "OUTPUT LABELS:\n"
         for i in range(NUM_OUTPUTS):
             preamble += f"{i} Output {i+1}\n"
-        preamble += "\n"
+        preamble += "\nVIDEO OUTPUT ROUTING:\n"
         
-        preamble += "VIDEO OUTPUT ROUTING:\n"
         for i in range(NUM_OUTPUTS):
             preamble += f"{i} {i}\n"
-        preamble += "\n"
+        preamble += "\nVIDEO OUTPUT LOCKS:\n"
         
-        preamble += "VIDEO OUTPUT LOCKS:\n"
         for i in range(NUM_OUTPUTS):
             preamble += f"{i} U\n"
         preamble += "\n"
 
-        # Alles auf einmal in Bytes umwandeln und senden
         client_socket.sendall(preamble.encode('utf-8'))
 
-        # 2. Befehle empfangen
+        client_socket.sendall(preamble.encode('utf-8'))
+
         buffer = b""
         while True:
             data = client_socket.recv(1024)
@@ -120,7 +119,9 @@ def handle_client(client_socket, addr):
                                 out_idx = int(parts[0])
                                 in_idx = int(parts[1])
                                 if send_to_hardware(out_idx, in_idx):
-                                    client_socket.sendall(b"ACK\n\n")
+                                    # Feedback-Loop: Sende ACK und bestätige das neue Routing
+                                    feedback = f"ACK\n\nVIDEO OUTPUT ROUTING:\n{out_idx} {in_idx}\n\n"
+                                    client_socket.sendall(feedback.encode('ascii'))
                                 else:
                                     client_socket.sendall(b"NAK\n\n")
                             except ValueError:
@@ -143,8 +144,12 @@ def main():
     print(f"[SERVER] Blackmagic Bridge läuft auf Port {TCP_PORT}...")
 
     while True:
-        client, addr = server.accept()
-        threading.Thread(target=handle_client, args=(client, addr), daemon=True).start()
+        try:
+            client, addr = server.accept()
+            threading.Thread(target=handle_client, args=(client, addr), daemon=True).start()
+        except KeyboardInterrupt:
+            print("\n[SERVER] Manuell beendet.")
+            break
 
 if __name__ == "__main__":
     main()

@@ -1,37 +1,50 @@
 # rpi-videohub-control
 
-A Python-based bridge that transforms a legacy, USB-only Blackmagic Design Studio Videohub into a modern, network-accessible routing matrix.
+A lightweight Python bridge that turns a legacy Blackmagic Design Studio Videohub with a USB control interface into a network-accessible, Blackmagic-compatible routing matrix.
 
-By reverse-engineering the proprietary USB control transfers and emulating the official Blackmagic Ethernet Videohub Protocol (TCP Port 9990), this bridge allows you to control your legacy hardware over the network.
+This project reverse-engineers the proprietary USB control transfers used by older Videohub models and emulates the Blackmagic Ethernet Videohub protocol on TCP port 9990. The result is that modern Blackmagic control software can talk to the device as if it were a standard Ethernet-enabled Videohub.
+
+## Why this exists
+
+Many older Blackmagic Videohub hardware units feature a USB control interface but no built-in Ethernet controller. That makes them awkward to integrate into modern broadcast workflows, especially when you want to use the standard Blackmagic Videohub control software or Bitfocus Companion from a networked environment.
+
+`rpi-videohub-control` solves that by exposing the same protocol a modern Blackmagic Ethernet Videohub would expose, while translating routing commands to the USB control messages the hardware expects.
 
 ## Features
 
-- Full Network Emulation: Exposes TCP port 9990, mimicking a modern Blackmagic Ethernet Videohub.
-- Plug & Play Client Support: Works seamlessly with the official Blackmagic Videohub Control app (Windows/Mac) and Bitfocus Companion.
-- Real-Time Broadcast: If one client (or Companion) routes a signal, all other connected clients update their UI instantly.
-- Lightweight: Runs perfectly on any Raspberry Pi (Zero, 3, 4, or 5).
+- Full network emulation of the Blackmagic Ethernet Videohub protocol on port 9990
+- Compatibility with the official Blackmagic Videohub Control app
+- Compatibility with Bitfocus Companion
+- Real-time routing feedback across connected clients
+- Lightweight enough to run on a Raspberry Pi Zero, 3, 4, or 5
+- Works with legacy USB-only Studio Videohub hardware
 
-## Hardware Requirements
+## Supported hardware
 
-- Raspberry Pi running Raspberry Pi OS / Debian
-- Legacy Blackmagic Studio Videohub with USB interface
+This project targets legacy Blackmagic Studio Videohub devices using the USB control interface with the following identifiers:
+
 - Vendor ID: `0x1edb`
 - Product ID: `0xbd25`
 
+## Requirements
+
+- Raspberry Pi running Raspberry Pi OS / Debian
+- Blackmagic Studio Videohub with USB interface
+- Python 3
+- `pyusb`
+
 ## Installation
 
-### 1. Install dependencies
-
-The script relies on `pyusb` to communicate with the hardware. Install the system package to avoid Python environment conflicts:
+### 1. Install system dependencies
 
 ```bash
 sudo apt update
 sudo apt install python3-usb git -y
 ```
 
-### 2. Configure USB permissions with udev
+### 2. Configure USB permissions
 
-By default, Linux requires root privileges to send raw USB commands. To allow the script to run as a standard user, create a udev rule for the Blackmagic Videohub:
+Linux usually requires elevated permissions for raw USB access. Create a udev rule so the device can be accessed without root:
 
 ```bash
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1edb", ATTR{idProduct}=="bd25", MODE="0666"' | sudo tee /etc/udev/rules.d/99-blackmagic-usb.rules
@@ -39,7 +52,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-Note: You may need to physically unplug and replug the USB cable once for the new permissions to apply.
+If the device was already connected, unplug and reconnect it once so the new permission rules take effect.
 
 ### 3. Clone the repository
 
@@ -49,34 +62,38 @@ git clone https://github.com/floriandobler/rpi-videohub-control.git
 cd rpi-videohub-control
 ```
 
-### 4. Test the bridge
+### 4. Install Python dependencies
 
-Run the script manually to ensure everything is working:
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+### 5. Run the bridge
 
 ```bash
 python3 videohub_bridge.py
 ```
 
-You should see:
+Expected startup output:
 
 ```text
 [USB INFO] Videohub successfully initialized.
 [SERVER] Blackmagic bridge running on port 9990...
 ```
 
-Open the Blackmagic Videohub Control app on your computer, enter the Raspberry Pi's IP address, and verify that the matrix loads and routes correctly.
+Open the Blackmagic Videohub Control app on your computer, connect to the Raspberry Pi's IP address, and verify that the matrix loads and routing works as expected.
 
-## Run as a background service (autostart)
+## Running as a background service
 
-To ensure the bridge starts automatically whenever the Raspberry Pi boots, set it up as a `systemd` service.
+To make the bridge start automatically on boot, install it as a `systemd` service.
 
-Create a new service file:
+Create a service file:
 
 ```bash
 sudo nano /etc/systemd/system/videohub.service
 ```
 
-Paste the following configuration (adjust `/home/pi/rpi-videohub-control` if your path or username is different):
+Use the following configuration:
 
 ```ini
 [Unit]
@@ -95,7 +112,7 @@ User=pi
 WantedBy=multi-user.target
 ```
 
-Enable and start the service:
+Then enable and start it:
 
 ```bash
 sudo systemctl daemon-reload
@@ -103,24 +120,65 @@ sudo systemctl enable videohub.service
 sudo systemctl start videohub.service
 ```
 
-You can check the background logs at any time using:
+Check logs with:
 
 ```bash
 sudo journalctl -u videohub.service -f
 ```
 
-## Under the hood: the USB protocol
+## How it works
 
-Legacy Videohubs do not use bulk endpoint payloads for routing. Instead, the routing command is encoded directly into the USB Control Transfer header (Endpoint 0).
+The bridge listens on TCP port 9990 and speaks the Blackmagic Ethernet Videohub protocol. When a client sends routing information, the script converts the requested output/input mapping into the corresponding USB control transfer used by the hardware.
 
-The bridge translates the 0-based `VIDEO OUTPUT ROUTING` TCP commands into the following USB Control Transfer:
+The bridge also broadcasts routing updates to all connected clients so the state remains synchronized across multiple control surfaces.
+
+## Protocol details
+
+Legacy Videohub hardware does not use bulk endpoint payloads for routing. Instead, the routing change is encoded directly into the USB control transfer header.
+
+This project translates the standard Blackmagic routing protocol into the equivalent USB request:
 
 - `bmRequestType`: `0xc0` (Device to Host, Vendor, Device)
 - `bRequest`: `215` (`0xd7`)
-- `wValue`: Input Index (`0-15`)
-- `wIndex`: Output Index (`16-31` for Outputs 1-16)
-- `wLength`: `1 byte` (Status return)
+- `wValue`: Input index (`0-15`)
+- `wIndex`: Output index (`16-31` for Outputs 1-16)
+- `wLength`: `1 byte` (status return)
+
+## Troubleshooting
+
+### Device not found over USB
+
+Check that:
+
+- the Videohub is connected via USB
+- the correct USB IDs are being used
+- the udev rule was applied correctly
+- the device was unplugged and reconnected after the rule was created
+
+### Permission denied
+
+Re-run the udev rule installation and unplug/reconnect the device.
+
+### Control application cannot connect
+
+Verify that:
+
+- the Raspberry Pi is on the same network as the control machine
+- the bridge is listening on port 9990
+- the service is running if you are using the systemd setup
+
+### Bridge starts but routing does not work
+
+Check the Python output for USB initialization or transfer errors. The script logs failures to the terminal and resets the USB device if a transfer fails.
+
+## Security note
+
+The provided udev rule uses `MODE="0666"` for simplicity. This is suitable for a dedicated Raspberry Pi used as a single-purpose bridge, but a more restrictive group-based permission model may be preferable in shared or multi-user environments.
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 ## Notes
 
-This project is designed for legacy Blackmagic Studio Videohub hardware that exposes a USB control interface but not a native Ethernet control port. It emulates the official Blackmagic Ethernet Videohub protocol so standard control software can operate it as if it were a modern networked Videohub.
+This project is intended for legacy Blackmagic Studio Videohub hardware that exposes a USB interface but lacks a native Ethernet control port. It is designed to let standard Blackmagic control clients operate the device as if it were a modern network-enabled Videohub.

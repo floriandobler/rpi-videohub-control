@@ -9,7 +9,7 @@ By reverse-engineering the proprietary USB control transfers and emulating the o
 - Full Network Emulation: Exposes TCP port 9990, mimicking a modern Blackmagic Ethernet Videohub.
 - Plug & Play Client Support: Works seamlessly with the official Blackmagic Videohub Control app (Windows/Mac) and Bitfocus Companion.
 - Real-Time Broadcast: If one client (or Companion) routes a signal, all other connected clients update their UI instantly.
-- Lightweight: Runs perfectly on any Raspberry Pi (Zero, 3, 4, or 5).
+- Lightweight: Runs perfectly on any Raspberry Pi (Zero, 1 rev B, 3, 4, or 5).
 
 ## Hardware Requirements
 

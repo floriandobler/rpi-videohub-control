@@ -2,7 +2,6 @@ import socket
 import threading
 import usb.core
 import usb.util
-import sys
 
 USB_VID = 0x1edb
 USB_PID = 0xbd25
@@ -13,6 +12,10 @@ NUM_OUTPUTS = 16
 
 dev = None
 usb_lock = threading.Lock()
+
+# Globale Client-Liste für das Broadcast-Feedback
+active_clients = []
+clients_lock = threading.Lock()
 
 def init_usb():
     global dev
@@ -42,13 +45,9 @@ def send_to_hardware(output_idx, input_idx):
             if not init_usb():
                 return False
         try:
-            hw_input = input_idx
-            hw_output = output_idx + 16
-
-            dev.ctrl_transfer(0xc0, 215, hw_input, hw_output, 1, timeout=1000)
+            dev.ctrl_transfer(0xc0, 215, input_idx, output_idx + 16, 1, timeout=1000)
             print(f"[ROUTING] Output {output_idx + 1} <- Input {input_idx + 1} geschaltet.")
             return True
-            
         except Exception as e:
             print(f"[USB WRITE ERROR] {e} -> Setze USB zurück.")
             try:
@@ -58,10 +57,24 @@ def send_to_hardware(output_idx, input_idx):
             dev = None
             return False
 
+def broadcast_routing_update(out_idx, in_idx):
+    """Pusht den neuen Status an alle verbundenen Clients (Companion & Software)"""
+    update_msg = f"VIDEO OUTPUT ROUTING:\n{out_idx} {in_idx}\n\n".encode('ascii')
+    with clients_lock:
+        for client in active_clients:
+            try:
+                client.sendall(update_msg)
+            except Exception:
+                pass # Fehlerhafte Sockets werden im eigenen Thread aufgeräumt
+
 def handle_client(client_socket, addr):
     print(f"[TCP] Client verbunden: {addr[0]}")
     
-    # Preamble aufbauen (Strikt nach Blackmagic Ethernet Protocol Spezifikation)
+    with clients_lock:
+        active_clients.append(client_socket)
+        
+    try:
+        # Preamble (Strikt nach Blackmagic Ethernet Protocol Spezifikation)
         preamble = (
             "PROTOCOL: Videohub\n"
             "VERSION: 2.8\n\n"
@@ -93,8 +106,6 @@ def handle_client(client_socket, addr):
 
         client_socket.sendall(preamble.encode('utf-8'))
 
-        client_socket.sendall(preamble.encode('utf-8'))
-
         buffer = b""
         while True:
             data = client_socket.recv(1024)
@@ -119,9 +130,10 @@ def handle_client(client_socket, addr):
                                 out_idx = int(parts[0])
                                 in_idx = int(parts[1])
                                 if send_to_hardware(out_idx, in_idx):
-                                    # Feedback-Loop: Sende ACK und bestätige das neue Routing
-                                    feedback = f"ACK\n\nVIDEO OUTPUT ROUTING:\n{out_idx} {in_idx}\n\n"
-                                    client_socket.sendall(feedback.encode('ascii'))
+                                    # Dem Sender das formale ACK geben
+                                    client_socket.sendall(b"ACK\n\n")
+                                    # Allen anderen (und dem Sender) das neue Routing flashen
+                                    broadcast_routing_update(out_idx, in_idx)
                                 else:
                                     client_socket.sendall(b"NAK\n\n")
                             except ValueError:
@@ -132,6 +144,9 @@ def handle_client(client_socket, addr):
     except Exception as e:
         print(f"[TCP ERROR] {addr[0]}: {e}")
     finally:
+        with clients_lock:
+            if client_socket in active_clients:
+                active_clients.remove(client_socket)
         client_socket.close()
         print(f"[TCP] Verbindung getrennt: {addr[0]}")
 
@@ -140,7 +155,7 @@ def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("0.0.0.0", TCP_PORT))
-    server.listen(5)
+    server.listen(10)
     print(f"[SERVER] Blackmagic Bridge läuft auf Port {TCP_PORT}...")
 
     while True:
